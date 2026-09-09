@@ -300,7 +300,8 @@ let state = {
   students: [],
   structure: { sections: ['A'], subjects: [] },
   attendance: {},
-  users: []
+  users: [],
+  institute: { name:'', address:'', phone:'', principal:'' }
 };
 
 let ui = {
@@ -435,11 +436,12 @@ async function loadState(){
 }
 
 function applyRemoteState(data){
-  state = Object.assign({ students:[], structure:{sections:['A'],subjects:[]}, attendance:{}, users:[] }, data);
+  state = Object.assign({ students:[], structure:{sections:['A'],subjects:[]}, attendance:{}, users:[], institute:{name:'',address:'',phone:'',principal:''} }, data);
   if(!state.structure) state.structure = { sections:['A'], subjects:[] };
   if(!state.structure.subjects) state.structure.subjects = [];
   if(!state.structure.sections || state.structure.sections.length===0) state.structure.sections = ['A'];
   if(!state.users) state.users = [];
+  if(!state.institute) state.institute = { name:'', address:'', phone:'', principal:'' };
   state.users.forEach(u=>{
     if(u.role==='teacher' && !u.assignments){
       u.assignments = u.class ? [{ class:u.class, stream:u.stream||'', section:u.section }] : [];
@@ -513,6 +515,26 @@ function attemptLogin(username, password){
   }
   ui.authError = 'Incorrect username or password.';
   return false;
+}
+
+async function registerAdmin(username, password){
+  username = username.trim();
+  if(state.users.some(u => u.username.toLowerCase() === username.toLowerCase())){
+    ui.authError = 'That username is already taken.';
+    return false;
+  }
+  const u = { id: uid(), username, password, role:'admin' };
+  state.users.push(u);
+  const ok = await saveState(false);
+  if(!ok){
+    state.users = state.users.filter(x=>x.id!==u.id); // roll back — never actually reached the server
+    ui.authError = 'Could not create the account — check your internet connection and try again.';
+    return false;
+  }
+  ui.currentUser = u;
+  ui.authError = '';
+  ui.tab = 'dashboard';
+  return true;
 }
 
 async function registerTeacher(username, password){
@@ -877,6 +899,7 @@ function render(){
       ${navBtn('attendance','Attendance')}
       ${navBtn('fees','Fees')}
       ${isAdmin() ? navBtn('teachers','Teachers') : ''}
+      ${isAdmin() ? navBtn('institute','Institute') : ''}
       ${isAdmin() ? navBtn('data','Backup') : ''}
     </nav>
     <main>${renderTab()}</main>
@@ -918,12 +941,31 @@ function renderAuthScreen(){
           <h1>Register</h1>
           <div class="sub">Create your teacher login. Your admin will assign you to a class and section afterward — you'll see a waiting message until then.</div>
           ${connectionBanner}
-          ${connectionBanner}
           ${ui.authError ? `<div class="auth-error">${esc(ui.authError)}</div>` : ''}
           <div class="field"><label>Choose a username</label><input id="register-username" placeholder="e.g. mrs.sharma"></div>
           <div class="field"><label>Choose a password</label><input id="register-password" type="password" placeholder="Password"></div>
           <div class="field"><label>Confirm password</label><input id="register-password2" type="password" placeholder="Repeat password"></div>
           <button class="btn amber full" id="register-submit">Create teacher account</button>
+          <div class="sub" style="text-align:center; margin-top:14px; margin-bottom:0;">
+            Already have an account? <a data-auth-switch="login" style="color:var(--primary); font-weight:700; text-decoration:underline;">Log in</a>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if(ui.authMode === 'register-admin'){
+    return `
+      <div class="auth-wrap">
+        <div class="auth-card">
+          <h1>New admin account</h1>
+          <div class="sub">Create another full-access admin login. Anyone with this account can see and manage everything — only share it with people you trust with full access.</div>
+          ${connectionBanner}
+          ${ui.authError ? `<div class="auth-error">${esc(ui.authError)}</div>` : ''}
+          <div class="field"><label>Choose a username</label><input id="register-admin-username" placeholder="e.g. vice-principal"></div>
+          <div class="field"><label>Choose a password</label><input id="register-admin-password" type="password" placeholder="Password"></div>
+          <div class="field"><label>Confirm password</label><input id="register-admin-password2" type="password" placeholder="Repeat password"></div>
+          <button class="btn amber full" id="register-admin-submit">Create admin account</button>
           <div class="sub" style="text-align:center; margin-top:14px; margin-bottom:0;">
             Already have an account? <a data-auth-switch="login" style="color:var(--primary); font-weight:700; text-decoration:underline;">Log in</a>
           </div>
@@ -950,7 +992,10 @@ function renderAuthScreen(){
         ${ui.loginRole==='teacher' ? `
         <div class="sub" style="text-align:center; margin-top:14px; margin-bottom:0;">
           New teacher? <a data-auth-switch="register" style="color:var(--primary); font-weight:700; text-decoration:underline;">Register here</a>
-        </div>` : ''}
+        </div>` : `
+        <div class="sub" style="text-align:center; margin-top:14px; margin-bottom:0;">
+          Need another admin account? <a data-auth-switch="register-admin" style="color:var(--primary); font-weight:700; text-decoration:underline;">Create one</a>
+        </div>`}
       </div>
     </div>
   `;
@@ -990,6 +1035,20 @@ function attachAuthHandlers(){
       render();
     });
   }
+  const registerAdminBtn = document.getElementById('register-admin-submit');
+  if(registerAdminBtn){
+    registerAdminBtn.addEventListener('click', async ()=>{
+      const u = document.getElementById('register-admin-username').value.trim();
+      const p = document.getElementById('register-admin-password').value;
+      const p2 = document.getElementById('register-admin-password2').value;
+      if(!u || !p){ ui.authError = 'Enter a username and password.'; render(); return; }
+      if(p !== p2){ ui.authError = 'Passwords do not match.'; render(); return; }
+      registerAdminBtn.disabled = true; registerAdminBtn.textContent = 'Creating…';
+      const ok = await registerAdmin(u, p);
+      if(ok){ ui.authMode = 'login'; }
+      render();
+    });
+  }
   const loginBtn = document.getElementById('login-submit');
   if(loginBtn){
     const doLogin = () => {
@@ -1008,12 +1067,13 @@ function navBtn(id,label){
 }
 
 function renderTab(){
-  if(isTeacher() && (ui.tab==='teachers' || ui.tab==='data')) ui.tab = 'dashboard';
+  if(isTeacher() && (ui.tab==='teachers' || ui.tab==='data' || ui.tab==='institute')) ui.tab = 'dashboard';
   if(ui.tab==='dashboard') return renderDashboard();
   if(ui.tab==='students') return renderStudents();
   if(ui.tab==='attendance') return renderAttendance();
   if(ui.tab==='fees') return renderFeesTab();
   if(ui.tab==='teachers' && isAdmin()) return renderTeachers();
+  if(ui.tab==='institute' && isAdmin()) return renderInstituteTab();
   if(ui.tab==='data' && isAdmin()) return renderDataTab();
   return renderDashboard();
 }
@@ -1132,6 +1192,23 @@ function renderDashboard(){
       <p style="font-size:0.88rem; color:var(--ink-soft); margin-bottom:12px;">Add your first student to see enrollment and attendance numbers here.</p>
       <button class="btn amber" data-nav="students">Add a student</button>
     </div>` : ''}
+  `;
+}
+
+function renderInstituteTab(){
+  const inst = state.institute || { name:'', address:'', phone:'', principal:'' };
+  return `
+    <div class="card">
+      <h2>Institute details</h2>
+      <p class="hint" style="margin-bottom:14px;">This information is stored for your records — used on things like printed reports later.</p>
+      <div class="field"><label>Institute name</label><input id="inst-name" value="${esc(inst.name)}" placeholder="e.g. Greenwood Public School"></div>
+      <div class="field"><label>Address</label><input id="inst-address" value="${esc(inst.address)}" placeholder="Full address"></div>
+      <div class="grid cols-2">
+        <div class="field"><label>Phone number</label><input id="inst-phone" value="${esc(inst.phone)}" placeholder="Contact number"></div>
+        <div class="field"><label>Principal's name</label><input id="inst-principal" value="${esc(inst.principal)}" placeholder="Full name"></div>
+      </div>
+      <button class="btn amber" id="inst-save">Save details</button>
+    </div>
   `;
 }
 
@@ -1919,6 +1996,19 @@ function attachHandlers(){
       ui.editingFee = null;
       render();
       showToast('Fee record removed');
+    });
+  }
+
+  const instSaveBtn = document.getElementById('inst-save');
+  if(instSaveBtn){
+    instSaveBtn.addEventListener('click', async ()=>{
+      state.institute = {
+        name: document.getElementById('inst-name').value.trim(),
+        address: document.getElementById('inst-address').value.trim(),
+        phone: document.getElementById('inst-phone').value.trim(),
+        principal: document.getElementById('inst-principal').value.trim(),
+      };
+      await saveState(false);
     });
   }
 
