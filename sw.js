@@ -1,4 +1,4 @@
-const CACHE_NAME = 'roll-book-v1';
+const CACHE_NAME = 'roll-book-v2';
 const ASSETS = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -17,14 +17,14 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Network-first: always try to get the freshest copy from the server.
+// Only fall back to the cached copy if there's genuinely no internet.
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
-        return res;
-      }).catch(() => cached);
-    })
+    fetch(event.request, { cache: 'no-store' }).then((res) => {
+      const resClone = res.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+      return res;
+    }).catch(() => caches.match(event.request))
   );
 });
